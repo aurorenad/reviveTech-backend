@@ -190,6 +190,7 @@ export const login = async (req: Request, res: Response): Promise<void> => {
         lastName: user.lastName,
         email: user.email,
         phone: user.phone,
+        avatarUrl: user.avatarUrl,
         role: user.role,
       },
     });

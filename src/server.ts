@@ -1,12 +1,9 @@
-import { config } from "dotenv";
-import { resolve } from "node:path";
+import "./load-env.js";
 import express from "express";
 import type { Request, Response } from "express";
 import cors from "cors";
-
-config({ path: resolve(process.cwd(), ".env") });
-config({ path: resolve(process.cwd(), "src/.env") });
 import routes from "./routes/index.js";
+import { isCloudinaryReady } from "./config/cloudinary.js";
 import { prisma } from "./config/prisma.js";
 import { getOpenApiSpec, swaggerHtml } from "./config/openapi.js";
 import { errorHandler } from "./middlewares/errorHandler.js";
@@ -50,6 +47,7 @@ app.get("/health", async (req: Request, res: Response) => {
       services: {
         database: "CONNECTED",
         api: "HEALTHY",
+        cloudinary: isCloudinaryReady() ? "CONFIGURED" : "NOT_CONFIGURED",
       },
     });
   } catch (error: any) {
@@ -76,6 +74,7 @@ app.use(errorHandler);
 // Boot the server
 const server = app.listen(PORT, () => {
   console.log(`[Server] Running on http://localhost:${PORT}`);
+  console.log(`[Cloudinary] ${isCloudinaryReady() ? "configured" : "NOT configured — set CLOUDINARY_* in .env"}`);
 });
 
 process.on("SIGINT", async () => {

@@ -7,6 +7,7 @@ import { writeAuditLog } from "../utils/audit-log.js";
 import { parseOptionalString } from "../utils/request.js";
 import { deliverOtpEmail } from "../utils/send-otp.js";
 import { frontendRoleToBackend, frontendStatusToBackend } from "../utils/roles.js";
+import { uploadProfileAvatar } from "../services/upload.service.js";
 
 export const getProfile = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
@@ -23,6 +24,7 @@ export const getProfile = async (req: AuthenticatedRequest, res: Response): Prom
         lastName: user.lastName,
         email: user.email,
         phone: user.phone,
+        avatarUrl: user.avatarUrl,
         role: user.role,
         createdAt: user.createdAt,
       },
@@ -42,12 +44,19 @@ export const updateProfile = async (req: AuthenticatedRequest, res: Response): P
 
     const { firstName, lastName, phone } = req.body;
 
+    const normalizedPhone =
+      phone === undefined
+        ? user.phone
+        : typeof phone === "string" && phone.trim() && phone.trim() !== "—"
+          ? phone.trim()
+          : null;
+
     const updatedUser = await prisma.user.update({
       where: { id: user.id },
       data: {
-        firstName: firstName || user.firstName,
-        lastName: lastName || user.lastName,
-        phone: phone !== undefined ? phone : user.phone,
+        ...(firstName !== undefined && firstName !== "" ? { firstName: String(firstName).trim() } : {}),
+        ...(lastName !== undefined ? { lastName: String(lastName).trim() } : {}),
+        ...(phone !== undefined ? { phone: normalizedPhone } : {}),
       },
     });
 
@@ -59,11 +68,53 @@ export const updateProfile = async (req: AuthenticatedRequest, res: Response): P
         lastName: updatedUser.lastName,
         email: updatedUser.email,
         phone: updatedUser.phone,
+        avatarUrl: updatedUser.avatarUrl,
         role: updatedUser.role,
       },
     });
   } catch (error: any) {
     res.status(500).json({ message: "Failed to update profile", error: error.message });
+  }
+};
+
+export const updateProfileAvatar = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const user = req.user;
+    if (!user) {
+      res.status(401).json({ message: "Not authenticated" });
+      return;
+    }
+
+    const file = (req as AuthenticatedRequest & { file?: Express.Multer.File }).file;
+    if (!file) {
+      res.status(400).json({ message: "Avatar image is required" });
+      return;
+    }
+
+    const avatarUrl = await uploadProfileAvatar({ buffer: file.buffer, originalname: file.originalname });
+    const updatedUser = await prisma.user.update({
+      where: { id: user.id },
+      data: { avatarUrl },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        email: true,
+        phone: true,
+        avatarUrl: true,
+        role: true,
+      },
+    });
+
+    await writeAuditLog({
+      action: "USER_UPDATE_AVATAR",
+      details: `User ${updatedUser.email} updated profile avatar.`,
+      userId: updatedUser.id,
+    });
+
+    res.status(200).json({ message: "Profile avatar updated successfully", user: updatedUser });
+  } catch (error: any) {
+    res.status(500).json({ message: "Failed to update profile avatar", error: error.message });
   }
 };
 

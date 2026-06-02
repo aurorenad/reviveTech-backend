@@ -14,6 +14,8 @@ import {
   submitTradeIn,
   listTradeIns,
   reviewTradeIn,
+  technicianReviewTradeIn,
+  customerDecisionTradeIn,
 } from "../controller/device.controller.js";
 import { requireAuth, requireRoles } from "../middleware/auth.js";
 import { tradeInImageUpload } from "../middleware/upload.js";
@@ -23,7 +25,13 @@ const router = Router();
 
 // Technician & Admin Device management routes
 router.get("/", requireAuth, requireRoles([UserRole.TECHNICIAN, UserRole.ADMIN]), listDevices);
-router.post("/intake", requireAuth, requireRoles([UserRole.TECHNICIAN, UserRole.ADMIN]), intakeDevice);
+router.post(
+  "/intake",
+  requireAuth,
+  requireRoles([UserRole.TECHNICIAN, UserRole.ADMIN]),
+  tradeInImageUpload.array("images", 5),
+  intakeDevice
+);
 router.post("/repair", requireAuth, requireRoles([UserRole.TECHNICIAN]), updateRepairStatus);
 router.post("/qc", requireAuth, requireRoles([UserRole.TECHNICIAN]), submitQcCheck);
 router.post("/certify", requireAuth, requireRoles([UserRole.TECHNICIAN]), certifyDevice);
@@ -42,6 +50,8 @@ router.post(
 // Management Trade-In routes
 router.get("/trade-in", requireAuth, listTradeIns);
 router.get("/trade-in/:id", requireAuth, getTradeIn);
+router.put("/trade-in/:id/technician-review", requireAuth, requireRoles([UserRole.TECHNICIAN]), technicianReviewTradeIn);
+router.put("/trade-in/:id/customer-decision", requireAuth, requireRoles([UserRole.CUSTOMER]), customerDecisionTradeIn);
 router.put("/trade-in", requireAuth, requireRoles([UserRole.ADMIN, UserRole.FINANCE_OFFICER]), reviewTradeIn);
 router.put("/trade-in/:id", requireAuth, requireRoles([UserRole.ADMIN, UserRole.FINANCE_OFFICER]), reviewTradeIn);
 router.delete("/trade-in/:id", requireAuth, deleteTradeIn);

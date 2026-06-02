@@ -8,14 +8,17 @@ import {
   adminUpdateUser,
   getProfile,
   updateProfile,
+  updateProfileAvatar,
 } from "../controller/user.controller.js";
 import { requireAuth, requireRoles } from "../middleware/auth.js";
+import { avatarUpload } from "../middleware/upload.js";
 import { UserRole } from "@prisma/client";
 
 const router = Router();
 
 router.get("/profile", requireAuth, getProfile);
 router.put("/profile", requireAuth, updateProfile);
+router.put("/profile/avatar", requireAuth, avatarUpload.single("avatar"), updateProfileAvatar);
 
 // Admin-only actions
 router.post("/admin/users", requireAuth, requireRoles([UserRole.ADMIN]), adminCreateUser);

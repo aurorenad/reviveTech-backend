@@ -191,3 +191,91 @@ export const getInventoryPrediction = async (req: AuthenticatedRequest, res: Res
     res.status(500).json({ message: "Failed to generate inventory predictions", error: error.message });
   }
 };
+
+export const getSystemLogs = async (_req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const limitRaw = Number(_req.query["limit"] || 100);
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(500, limitRaw)) : 100;
+
+    const logs = await prisma.systemLog.findMany({
+      orderBy: { createdAt: "desc" },
+      take: limit,
+      include: {
+        user: {
+          select: { id: true, firstName: true, lastName: true, email: true, role: true },
+        },
+      },
+    });
+
+    res.status(200).json({ logs });
+  } catch (error: any) {
+    res.status(500).json({ message: "Failed to fetch system logs", error: error.message });
+  }
+};
+
+export const getSalesSummary = async (_req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const orders = await prisma.order.findMany({
+      where: { paymentStatus: "PAID" },
+      include: {
+        orderItems: {
+          include: {
+            device: {
+              select: { basePrice: true, brand: true, model: true, condition: true },
+            },
+          },
+        },
+      },
+      orderBy: { createdAt: "asc" },
+    });
+
+    type MonthBucket = { month: string; orders: number; revenue: number; profit: number };
+    const byMonth: Record<string, MonthBucket> = {};
+    for (const order of orders) {
+      const month = order.createdAt.toLocaleDateString("en-US", { month: "short", year: "2-digit" });
+      if (!byMonth[month]) byMonth[month] = { month, orders: 0, revenue: 0, profit: 0 };
+      byMonth[month].orders += 1;
+      byMonth[month].revenue += order.totalAmount;
+      byMonth[month].profit += order.orderItems.reduce((sum, item) => {
+        const cost = (item.device?.basePrice ?? item.price) * item.quantity;
+        const earned = item.price * item.quantity;
+        return sum + (earned - cost);
+      }, 0);
+    }
+
+    const monthly = Object.values(byMonth);
+    const rows = orders.map((order) => {
+      const revenue = order.totalAmount;
+      const profit = order.orderItems.reduce((sum, item) => {
+        const cost = (item.device?.basePrice ?? item.price) * item.quantity;
+        return sum + (item.price * item.quantity - cost);
+      }, 0);
+      return {
+        id: order.id,
+        period: order.createdAt.toISOString().slice(0, 10),
+        region: "Global",
+        orders: order.orderItems.reduce((s, i) => s + i.quantity, 0),
+        revenue,
+        profit,
+        margin: revenue > 0 ? (profit / revenue) * 100 : 0,
+        growth: 0,
+      };
+    });
+
+    res.status(200).json({
+      kpis: {
+        revenue: monthly.reduce((s, m) => s + m.revenue, 0),
+        orders: monthly.reduce((s, m) => s + m.orders, 0),
+        profit: monthly.reduce((s, m) => s + m.profit, 0),
+      },
+      trends: {
+        revenue: monthly.map((m) => ({ month: m.month, revenue: Math.round(m.revenue) })),
+        orders: monthly.map((m) => ({ month: m.month, orders: m.orders })),
+        profit: monthly.map((m) => ({ month: m.month, value: Math.round(m.profit) })),
+      },
+      rows,
+    });
+  } catch (error: any) {
+    res.status(500).json({ message: "Failed to fetch sales summary", error: error.message });
+  }
+};

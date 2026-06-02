@@ -3,7 +3,8 @@ import type { AuthenticatedRequest } from "../middleware/auth.js";
 import { prisma } from "../config/prisma.js";
 import { DeviceCondition, DeviceStatus, ListingStatus, TradeInStatus, UserRole } from "@prisma/client";
 import { AiService } from "../services/ai.service.js";
-import { uploadTradeInImages, isCloudinaryConfigured } from "../services/upload.service.js";
+import { uploadInventoryImages, uploadTradeInImages, isCloudinaryConfigured } from "../services/upload.service.js";
+import { sendTradeInDecisionEmail, sendTradeInOfferAcceptedEmail, sendTradeInPickupEmail } from "../services/email.service.js";
 import { writeAuditLog } from "../utils/audit-log.js";
 import { parseOptionalString } from "../utils/request.js";
 
@@ -76,11 +77,14 @@ export const intakeDevice = async (req: AuthenticatedRequest, res: Response): Pr
 
     const { eWasteSavedKg, carbonSavedKg } = calculateSustainabilityMetrics(brand, model);
     const trustScore = calculateTrustScore(condition, batteryHealth || 100, 0);
+    const files = (req as AuthenticatedRequest & { files?: Express.Multer.File[] }).files ?? [];
+    const imageUrls = files.length ? await uploadInventoryImages(files) : [];
 
     const device = await prisma.device.create({
       data: {
         brand,
         model,
+        imageUrls: JSON.stringify(imageUrls),
         originalSerialNumber,
         condition: condition as DeviceCondition,
         status: DeviceStatus.INTAKE,
@@ -550,6 +554,9 @@ export const submitTradeIn = async (req: AuthenticatedRequest, res: Response): P
       condition: deviceCondition,
       batteryHealth: battery,
     });
+    const customerValuationMessage =
+      `According to the information you gave, we suggest an estimated offer of $${evaluation.tradeInRecommendation}. ` +
+      `Please bring your device to our technician for physical inspection to confirm that the provided details are accurate before final approval.`;
 
     const tradeIn = await prisma.tradeInRequest.create({
       data: {
@@ -567,7 +574,7 @@ export const submitTradeIn = async (req: AuthenticatedRequest, res: Response): P
         ram: ram ? String(ram) : null,
         color: color ? String(color) : null,
         location: location ? String(location) : null,
-        aiReasoning: evaluation.reasoning,
+        aiReasoning: customerValuationMessage,
         status: TradeInStatus.PENDING,
       },
       include: {
@@ -584,7 +591,10 @@ export const submitTradeIn = async (req: AuthenticatedRequest, res: Response): P
     res.status(201).json({
       message: "Sell request submitted. Our finance team will review it shortly.",
       tradeIn,
-      aiEvaluation: evaluation,
+      aiEvaluation: {
+        ...evaluation,
+        reasoning: customerValuationMessage,
+      },
       aiEnabled: AiService.isLlmConfigured(),
     });
   } catch (error: any) {
@@ -594,13 +604,19 @@ export const submitTradeIn = async (req: AuthenticatedRequest, res: Response): P
 
 export const listTradeIns = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    const isStaff = req.user?.role === UserRole.ADMIN || req.user?.role === UserRole.FINANCE_OFFICER;
+    const isStaff =
+      req.user?.role === UserRole.ADMIN ||
+      req.user?.role === UserRole.FINANCE_OFFICER ||
+      req.user?.role === UserRole.TECHNICIAN;
     const tradeIns = await prisma.tradeInRequest.findMany({
       where: isStaff ? {} : { userId: req.user!.id },
       include: {
         user: {
           select: { firstName: true, lastName: true, email: true }
-        }
+        },
+        technician: {
+          select: { firstName: true, lastName: true, email: true },
+        },
       },
       orderBy: { createdAt: "desc" }
     });
@@ -623,6 +639,7 @@ export const getTradeIn = async (req: AuthenticatedRequest, res: Response): Prom
       where: { id },
       include: {
         user: { select: { id: true, firstName: true, lastName: true, email: true, phone: true } },
+        technician: { select: { id: true, firstName: true, lastName: true, email: true } },
       },
     });
 
@@ -631,7 +648,11 @@ export const getTradeIn = async (req: AuthenticatedRequest, res: Response): Prom
       return;
     }
 
-    const canView = req.user?.role === UserRole.ADMIN || req.user?.role === UserRole.FINANCE_OFFICER || tradeIn.userId === req.user?.id;
+    const canView =
+      req.user?.role === UserRole.ADMIN ||
+      req.user?.role === UserRole.FINANCE_OFFICER ||
+      req.user?.role === UserRole.TECHNICIAN ||
+      tradeIn.userId === req.user?.id;
     if (!canView) {
       res.status(403).json({ message: "Forbidden: You can only view your own trade-in requests" });
       return;
@@ -643,10 +664,62 @@ export const getTradeIn = async (req: AuthenticatedRequest, res: Response): Prom
   }
 };
 
+export const technicianReviewTradeIn = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const tradeInId = parseOptionalString(req.params["id"]) || req.body.tradeInId;
+    const { technicianComment, repairEstimate } = req.body;
+
+    if (!tradeInId || !technicianComment || !String(technicianComment).trim() || repairEstimate === undefined) {
+      res.status(400).json({ message: "Required fields: tradeInId, technicianComment, repairEstimate" });
+      return;
+    }
+    const parsedEstimate = Number(repairEstimate);
+    if (!Number.isFinite(parsedEstimate) || parsedEstimate < 0) {
+      res.status(400).json({ message: "repairEstimate must be a valid number >= 0" });
+      return;
+    }
+
+    const tradeIn = await prisma.tradeInRequest.findUnique({ where: { id: tradeInId } });
+    if (!tradeIn) {
+      res.status(404).json({ message: "Trade-in request not found" });
+      return;
+    }
+
+    if (tradeIn.status !== TradeInStatus.PENDING) {
+      res.status(400).json({ message: "Only pending sell requests can be technician-reviewed" });
+      return;
+    }
+
+    const updatedTradeIn = await prisma.tradeInRequest.update({
+      where: { id: tradeInId },
+      data: {
+        technicianId: req.user?.id || null,
+        technicianComment: String(technicianComment).trim(),
+        technicianRepairEstimate: parsedEstimate,
+        technicianReviewedAt: new Date(),
+      },
+      include: {
+        user: { select: { firstName: true, lastName: true, email: true, phone: true } },
+        technician: { select: { firstName: true, lastName: true, email: true } },
+      },
+    });
+
+    await writeAuditLog({
+      action: "TRADE_IN_TECH_REVIEW",
+      details: `Technician ${req.user?.email} reviewed sell request ${tradeInId}.`,
+      userId: req.user?.id || null,
+    });
+
+    res.status(200).json({ message: "Technician review saved", tradeIn: updatedTradeIn });
+  } catch (error: any) {
+    res.status(500).json({ message: "Failed to save technician review", error: error.message });
+  }
+};
+
 export const reviewTradeIn = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const tradeInId = parseOptionalString(req.params["id"]) || req.body.tradeInId;
-    const { status, officerNotes } = req.body;
+    const { status, officerNotes, finalOfferAmount } = req.body;
 
     if (!tradeInId || !status) {
       res.status(400).json({ message: "Required fields: tradeInId, status" });
@@ -670,14 +743,36 @@ export const reviewTradeIn = async (req: AuthenticatedRequest, res: Response): P
       return;
     }
 
+    if (!tradeIn.technicianComment || tradeIn.technicianRepairEstimate === null) {
+      res.status(400).json({ message: "Technician must add test comment and repair estimate before finance decision" });
+      return;
+    }
+
+    let parsedFinalOffer: number | null = null;
+    if (status === TradeInStatus.APPROVED) {
+      if (finalOfferAmount === undefined || finalOfferAmount === null || finalOfferAmount === "") {
+        res.status(400).json({ message: "finalOfferAmount is required when approving a sell request" });
+        return;
+      }
+      const n = Number(finalOfferAmount);
+      if (!Number.isFinite(n) || n <= 0) {
+        res.status(400).json({ message: "finalOfferAmount must be a positive number" });
+        return;
+      }
+      parsedFinalOffer = n;
+    }
+
     const updatedTradeIn = await prisma.tradeInRequest.update({
       where: { id: tradeInId },
       data: {
         status: status as TradeInStatus,
+        finalOfferAmount: status === TradeInStatus.APPROVED ? parsedFinalOffer : null,
+        decisionAt: new Date(),
         ...(officerNotes !== undefined ? { officerNotes: officerNotes ? String(officerNotes) : null } : {}),
       },
       include: {
         user: { select: { firstName: true, lastName: true, email: true, phone: true } },
+        technician: { select: { firstName: true, lastName: true, email: true } },
       },
     });
 
@@ -687,8 +782,83 @@ export const reviewTradeIn = async (req: AuthenticatedRequest, res: Response): P
       userId: req.user?.id || null,
     });
 
-    // If completed, we can automatically create a device intake
-    if (status === "COMPLETED") {
+    try {
+      if (updatedTradeIn.user?.email) {
+        const customerName =
+          `${updatedTradeIn.user?.firstName || ""} ${updatedTradeIn.user?.lastName || ""}`.trim() || "Customer";
+        await sendTradeInDecisionEmail({
+          to: updatedTradeIn.user.email,
+          customerName,
+          deviceLabel: `${updatedTradeIn.brand} ${updatedTradeIn.model}`,
+          status: status as "APPROVED" | "REJECTED",
+          finalOfferAmount: updatedTradeIn.finalOfferAmount,
+          officerNotes: updatedTradeIn.officerNotes,
+          technicianComment: updatedTradeIn.technicianComment,
+        });
+      }
+    } catch (emailError) {
+      console.error("Failed to send trade-in decision email:", emailError);
+    }
+
+    res.status(200).json({ message: `Trade-in request marked as ${status}`, tradeIn: updatedTradeIn });
+  } catch (error: any) {
+    res.status(500).json({ message: "Failed to review trade-in", error: error.message });
+  }
+};
+
+export const customerDecisionTradeIn = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const tradeInId = parseOptionalString(req.params["id"]) || req.body.tradeInId;
+    const { decision } = req.body;
+
+    if (!tradeInId || !decision) {
+      res.status(400).json({ message: "Required fields: tradeInId, decision" });
+      return;
+    }
+
+    const normalizedDecision = String(decision).toUpperCase();
+    if (normalizedDecision !== "APPROVE" && normalizedDecision !== "REJECT") {
+      res.status(400).json({ message: "decision must be APPROVE or REJECT" });
+      return;
+    }
+
+    const tradeIn = await prisma.tradeInRequest.findUnique({
+      where: { id: tradeInId },
+      include: { user: { select: { firstName: true, lastName: true, email: true } } },
+    });
+    if (!tradeIn) {
+      res.status(404).json({ message: "Trade-in request not found" });
+      return;
+    }
+    if (tradeIn.userId !== req.user?.id) {
+      res.status(403).json({ message: "Forbidden: You can only decide your own offer" });
+      return;
+    }
+    if (tradeIn.status !== TradeInStatus.APPROVED || !tradeIn.finalOfferAmount) {
+      res.status(400).json({ message: "Offer is not ready for customer decision yet" });
+      return;
+    }
+    if (tradeIn.customerOfferDecision) {
+      res.status(400).json({ message: "Customer decision already recorded" });
+      return;
+    }
+
+    const accept = normalizedDecision === "APPROVE";
+    const nextStatus = accept ? TradeInStatus.COMPLETED : TradeInStatus.REJECTED;
+    const updatedTradeIn = await prisma.tradeInRequest.update({
+      where: { id: tradeInId },
+      data: {
+        customerOfferDecision: accept ? "APPROVED" : "REJECTED",
+        customerDecisionAt: new Date(),
+        status: nextStatus,
+      },
+      include: {
+        user: { select: { firstName: true, lastName: true, email: true, phone: true } },
+        technician: { select: { firstName: true, lastName: true, email: true } },
+      },
+    });
+
+    if (accept) {
       const { eWasteSavedKg, carbonSavedKg } = calculateSustainabilityMetrics(tradeIn.brand, tradeIn.model);
       await prisma.device.create({
         data: {
@@ -696,19 +866,49 @@ export const reviewTradeIn = async (req: AuthenticatedRequest, res: Response): P
           model: tradeIn.model,
           condition: tradeIn.condition,
           status: DeviceStatus.INTAKE,
-          basePrice: tradeIn.estimatedValue,
-          price: tradeIn.estimatedValue * 1.3, // 30% margin markup
-          ownerId: null, // Platform owns it now
-          trustScore: calculateTrustScore(tradeIn.condition, 85, 0),
+          basePrice: tradeIn.finalOfferAmount,
+          price: tradeIn.finalOfferAmount * 1.3,
+          ownerId: null,
+          trustScore: calculateTrustScore(tradeIn.condition, tradeIn.batteryHealth ?? 85, 0),
           eWasteSavedKg,
           carbonSavedKg,
-        }
+          repairNotes: `Repair pipeline initiated from accepted sell offer (${tradeIn.id}).`,
+        },
+      });
+      if (updatedTradeIn.user?.email) {
+        const customerName =
+          `${updatedTradeIn.user.firstName || ""} ${updatedTradeIn.user.lastName || ""}`.trim() || "Customer";
+        await sendTradeInOfferAcceptedEmail({
+          to: updatedTradeIn.user.email,
+          customerName,
+          deviceLabel: `${updatedTradeIn.brand} ${updatedTradeIn.model}`,
+          finalOfferAmount: updatedTradeIn.finalOfferAmount || tradeIn.finalOfferAmount || 0,
+        });
+      }
+    } else if (updatedTradeIn.user?.email) {
+      const customerName =
+        `${updatedTradeIn.user.firstName || ""} ${updatedTradeIn.user.lastName || ""}`.trim() || "Customer";
+      await sendTradeInPickupEmail({
+        to: updatedTradeIn.user.email,
+        customerName,
+        deviceLabel: `${updatedTradeIn.brand} ${updatedTradeIn.model}`,
       });
     }
 
-    res.status(200).json({ message: `Trade-in request marked as ${status}`, tradeIn: updatedTradeIn });
+    await writeAuditLog({
+      action: "TRADE_IN_CUSTOMER_DECISION",
+      details: `Customer ${req.user?.email} ${accept ? "approved" : "rejected"} sell offer ${tradeInId}.`,
+      userId: req.user?.id || null,
+    });
+
+    res.status(200).json({
+      message: accept
+        ? "Offer approved. Device moved to technician repair process."
+        : "Offer rejected. Pickup instructions were sent to your email.",
+      tradeIn: updatedTradeIn,
+    });
   } catch (error: any) {
-    res.status(500).json({ message: "Failed to review trade-in", error: error.message });
+    res.status(500).json({ message: "Failed to save customer decision", error: error.message });
   }
 };
 

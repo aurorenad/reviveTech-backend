@@ -135,6 +135,7 @@ model User {
   lastName  String
   email     String     @unique
   phone     String?    @unique
+  avatarUrl String?
   password  String
   role      UserRole   @default(CUSTOMER)
   status    UserStatus @default(ACTIVE)
@@ -153,6 +154,7 @@ model User {
   approvedFinancings     FinancingApplication[] @relation("OfficerFinancing")
   orders                 Order[]                @relation("UserOrders")
   tradeInRequests        TradeInRequest[]       @relation("UserTradeIn")
+  reviewedTradeInRequests TradeInRequest[]      @relation("TechnicianTradeInReview")
   supportSessions        SupportChatSession[]   @relation("UserSupport")
   cart                   Cart?
   wishlists              Wishlist[]
@@ -168,6 +170,7 @@ model Device {
   id                   String          @id @default(uuid())
   brand                String
   model                String
+  imageUrls            String          @default("[]")
   originalSerialNumber String?
   condition            DeviceCondition
   status               DeviceStatus    @default(INTAKE)
@@ -323,11 +326,22 @@ model TradeInRequest {
   color          String?
   location       String?
   aiReasoning    String?
+  technicianId   String?
+  technician     User?           @relation("TechnicianTradeInReview", fields: [technicianId], references: [id], onDelete: SetNull)
+  technicianComment String?
+  technicianRepairEstimate Float?
+  technicianReviewedAt DateTime?
   officerNotes   String?
+  finalOfferAmount Float?
+  decisionAt     DateTime?
+  customerOfferDecision String?
+  customerDecisionAt DateTime?
   status         TradeInStatus   @default(PENDING)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([technicianId])
 }
 
 model SupportChatSession {
