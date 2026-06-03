@@ -7,14 +7,16 @@ export async function deliverOtpEmail(
   purpose: OtpEmailPurpose,
 ): Promise<{ emailed: boolean; devOtp?: string }> {
   if (isEmailConfigured()) {
-    await sendOtpEmail(to, otp, purpose);
-    return { emailed: true };
+    try {
+      await sendOtpEmail(to, otp, purpose);
+      return { emailed: true };
+    } catch (err) {
+      console.error(`[Email] Failed to send OTP to ${to}:`, err);
+      // User is already created — do not fail registration; fall back below.
+    }
+  } else {
+    console.warn(`[Email] SMTP not configured — OTP for ${to} will be returned in API for verification flow`);
   }
 
-  if (process.env["NODE_ENV"] === "production") {
-    throw new Error("Email delivery is not configured");
-  }
-
-  console.warn(`[Email] SMTP not configured — OTP for ${to}: ${otp}`);
   return { emailed: false, devOtp: otp };
 }

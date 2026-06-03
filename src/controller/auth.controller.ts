@@ -21,7 +21,11 @@ export const register = async (req: Request, res: Response): Promise<void> => {
     }
 
     const existingUser = await prisma.user.findUnique({ where: { email } });
-    if (existingUser && existingUser.status !== UserStatus.DELETED) {
+    if (
+      existingUser &&
+      existingUser.status !== UserStatus.DELETED &&
+      existingUser.isVerified
+    ) {
       res.status(400).json({ message: "User with this email already exists" });
       return;
     }
@@ -68,12 +72,18 @@ export const register = async (req: Request, res: Response): Promise<void> => {
       userId: user.id,
     });
 
-    const delivery = await deliverOtpEmail(user.email, otp, "verification");
+    let delivery: { emailed: boolean; devOtp?: string };
+    try {
+      delivery = await deliverOtpEmail(user.email, otp, "verification");
+    } catch (err) {
+      console.error("[Register] OTP delivery failed after user create:", err);
+      delivery = { emailed: false, devOtp: otp };
+    }
 
     res.status(201).json({
       message: delivery.emailed
         ? "Registration successful. Please check your email for the verification code."
-        : "Registration successful. Please verify using the OTP code (email not configured).",
+        : "Registration successful. Enter the verification code on the next screen (email could not be sent).",
       userId: user.id,
       email: user.email,
       ...(delivery.devOtp ? { otpCode: delivery.devOtp } : {}),
