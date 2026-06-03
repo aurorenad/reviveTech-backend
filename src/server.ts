@@ -14,8 +14,39 @@ const PORT = process.env["PORT"] || 5001;
 
 app.set("trust proxy", 1);
 
-// Enable CORS and JSON parsing
-app.use(cors());
+// CORS: set FRONTEND_URL on Render (comma-separated). Use *.vercel.app to allow all Vercel previews.
+const corsOrigins = process.env["FRONTEND_URL"]
+  ?.split(",")
+  .map((o) => o.trim())
+  .filter(Boolean);
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin || !corsOrigins?.length) {
+        callback(null, true);
+        return;
+      }
+      if (corsOrigins.includes(origin)) {
+        callback(null, true);
+        return;
+      }
+      const allowVercelPreviews = corsOrigins.includes("*.vercel.app");
+      if (allowVercelPreviews) {
+        try {
+          if (new URL(origin).hostname.endsWith(".vercel.app")) {
+            callback(null, true);
+            return;
+          }
+        } catch {
+          /* invalid origin */
+        }
+      }
+      callback(new Error(`CORS blocked: ${origin}`));
+    },
+    credentials: true,
+  }),
+);
 app.use(express.json());
 app.use(rateLimiter());
 

@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "prisma generate && tsc",
-    "start": "prisma db push && prisma db seed && tsx src/server.ts",
+    "start": "tsx src/server.ts",
+    "start:local": "prisma db push && prisma db seed && tsx src/server.ts",
+    "start:render": "tsx src/server.ts",
     "seed": "tsx prisma/seed.ts",
     "test:email": "tsx scripts/test-email.ts",
     "db:push": "prisma db push",
