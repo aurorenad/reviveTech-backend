@@ -24,7 +24,7 @@ export const getProfile = async (req: AuthenticatedRequest, res: Response): Prom
         lastName: user.lastName,
         email: user.email,
         phone: user.phone,
-        avatarUrl: user.avatarUrl,
+       // avatarUrl: user.avatarUrl,
         role: user.role,
         createdAt: user.createdAt,
       },
@@ -68,7 +68,7 @@ export const updateProfile = async (req: AuthenticatedRequest, res: Response): P
         lastName: updatedUser.lastName,
         email: updatedUser.email,
         phone: updatedUser.phone,
-        avatarUrl: updatedUser.avatarUrl,
+       // avatarUrl: updatedUser.avatarUrl,
         role: updatedUser.role,
       },
     });

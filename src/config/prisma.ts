@@ -32,6 +32,7 @@ const shouldUseSsl = (url: string): boolean => {
 
 const pool = new pg.Pool({
   connectionString,
+  connectionTimeoutMillis: 15_000,
   ...(shouldUseSsl(connectionString) ? { ssl: { rejectUnauthorized: false } } : {}),
 });
 const adapter = new PrismaPg(pool);

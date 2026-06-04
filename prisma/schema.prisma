@@ -6,6 +6,355 @@ datasource db {
   provider = "postgresql"
 }
 
+model User {
+  id                     String                 @id @default(uuid())
+  firstName              String
+  lastName               String
+  email                  String                 @unique
+  phone                  String?                @unique
+  password               String
+  role                   UserRole               @default(CUSTOMER)
+  status                 UserStatus             @default(ACTIVE)
+  isVerified             Boolean                @default(false)
+  otpCode                String?
+  otpExpiresAt           DateTime?
+  createdAt              DateTime               @default(now())
+  updatedAt              DateTime               @updatedAt
+  cart                   Cart?
+  devicesOwned           Device[]               @relation("DeviceOwner")
+  approvedFinancings     FinancingApplication[] @relation("OfficerFinancing")
+  financingApplications  FinancingApplication[] @relation("CustomerFinancing")
+  notifications          Notification[]
+  orders                 Order[]                @relation("UserOrders")
+  payments               Payment[]
+  repairLogs             RepairLog[]            @relation("TechnicianRepair")
+  supportSessions        SupportChatSession[]   @relation("UserSupport")
+  logs                   SystemLog[]
+  tradeInRequests        TradeInRequest[]       @relation("UserTradeIn")
+  wishlists              Wishlist[]
+  aiInteractions         AiInteraction[]
+  assignedRefurbishments Refurbishment[]        @relation("RefurbishmentTechnician")
+  sustainabilityJobs     SustainabilityJob[]    @relation("SustainabilityJobAssignee")
+}
+
+model Device {
+  id                    String                 @id @default(uuid())
+  brand                 String
+  model                 String
+  originalSerialNumber  String?
+  condition             DeviceCondition
+  status                DeviceStatus           @default(INTAKE)
+  batteryHealth         Int                    @default(100)
+  repairNotes           String?
+  trustScore            Float                  @default(100.0)
+  eWasteSavedKg         Float                  @default(0.35)
+  carbonSavedKg         Float                  @default(50.0)
+  price                 Float
+  basePrice             Float
+  ownerId               String?
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+  cartItems             CartItem[]
+  owner                 User?                  @relation("DeviceOwner", fields: [ownerId], references: [id])
+  passport              DevicePassport?
+  financingApplications FinancingApplication[]
+  listings              MarketplaceListing[]
+  orderItems            OrderItem[]
+  repairLogs            RepairLog[]
+  scoreRecord           TrustScore?
+  wishlists             Wishlist[]
+  refurbishments        Refurbishment[]
+  sustainabilityJobs    SustainabilityJob[]
+}
+
+model DevicePassport {
+  id                   String   @id @default(uuid())
+  deviceId             String   @unique
+  repairHistory        String   @default("[]")
+  batteryHealthHistory String   @default("[]")
+  ownershipHistory     String   @default("[]")
+  certificationDetails String?
+  certifiedAt          DateTime @default(now())
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  device               Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+}
+
+model RepairLog {
+  id           String       @id @default(uuid())
+  deviceId     String
+  technicianId String
+  diagnostics  String
+  stepsTaken   String
+  partsUsed    String       @default("[]")
+  status       DeviceStatus
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  device       Device       @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  technician   User         @relation("TechnicianRepair", fields: [technicianId], references: [id])
+}
+
+model MarketplaceListing {
+  id          String        @id @default(uuid())
+  deviceId    String
+  title       String
+  description String
+  price       Float
+  status      ListingStatus @default(ACTIVE)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  device      Device        @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+}
+
+model FinancingApplication {
+  id                    String                 @id @default(uuid())
+  customerId            String
+  deviceId              String
+  status                FinancingStatus        @default(PENDING)
+  totalAmount           Float
+  interestRate          Float                  @default(0.12)
+  installmentMonths     Int                    @default(12)
+  monthlyRepayment      Float
+  riskSummary           String?
+  fraudFlags            String?
+  paymentAbilityScore   Float?
+  officerRecommendation String?
+  approvedById          String?
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+  approvedBy            User?                  @relation("OfficerFinancing", fields: [approvedById], references: [id])
+  customer              User                   @relation("CustomerFinancing", fields: [customerId], references: [id])
+  device                Device                 @relation(fields: [deviceId], references: [id])
+  repayments            InstallmentRepayment[]
+  orders                Order[]
+}
+
+model InstallmentRepayment {
+  id          String               @id @default(uuid())
+  financingId String
+  dueDate     DateTime
+  amountDue   Float
+  amountPaid  Float                @default(0.0)
+  paidAt      DateTime?
+  status      RepaymentStatus      @default(UNPAID)
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+  financing   FinancingApplication @relation(fields: [financingId], references: [id], onDelete: Cascade)
+}
+
+model Order {
+  id            String                @id @default(uuid())
+  customerId    String
+  totalAmount   Float
+  status        OrderStatus           @default(PENDING)
+  paymentStatus PaymentStatus         @default(UNPAID)
+  financingId   String?
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+  customer      User                  @relation("UserOrders", fields: [customerId], references: [id])
+  financing     FinancingApplication? @relation(fields: [financingId], references: [id])
+  orderItems    OrderItem[]
+  payments      Payment[]
+}
+
+model OrderItem {
+  id       String @id @default(uuid())
+  orderId  String
+  deviceId String
+  price    Float
+  quantity Int    @default(1)
+  device   Device @relation(fields: [deviceId], references: [id])
+  order    Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+}
+
+model TradeInRequest {
+  id             String          @id @default(uuid())
+  userId         String
+  brand          String
+  model          String
+  condition      DeviceCondition
+  estimatedValue Float
+  status         TradeInStatus   @default(PENDING)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  aiReasoning    String?
+  askingPrice    Float?
+  batteryHealth  Int?
+  category       String?
+  color          String?
+  defects        String?
+  imageUrls      String          @default("[]")
+  location       String?
+  officerNotes   String?
+  ram            String?
+  storage        String?
+  user           User            @relation("UserTradeIn", fields: [userId], references: [id])
+}
+
+model SupportChatSession {
+  id             String               @id @default(uuid())
+  customerId     String?
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+  messages       SupportChatMessage[]
+  customer       User?                @relation("UserSupport", fields: [customerId], references: [id])
+  aiInteractions AiInteraction[]
+}
+
+model SupportChatMessage {
+  id        String             @id @default(uuid())
+  sessionId String
+  sender    String
+  content   String
+  createdAt DateTime           @default(now())
+  session   SupportChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+}
+
+model TrustScore {
+  id                String   @id @default(uuid())
+  deviceId          String   @unique
+  score             Int
+  repairReliability Int
+  feedbackScore     Int
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  device            Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+}
+
+model Refurbishment {
+  id           String              @id @default(uuid())
+  deviceId     String
+  technicianId String?
+  status       RefurbishmentStatus @default(RECEIVED)
+  diagnostics  String?
+  repairNotes  String?
+  partsUsed    String              @default("[]")
+  qcPassed     Boolean             @default(false)
+  certifiedAt  DateTime?
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+  device       Device              @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  technician   User?               @relation("RefurbishmentTechnician", fields: [technicianId], references: [id])
+
+  @@index([deviceId])
+  @@index([technicianId])
+  @@index([status])
+  @@map("refurbishments")
+}
+
+model AiInteraction {
+  id        String              @id @default(uuid())
+  userId    String?
+  sessionId String?
+  type      AiInteractionType
+  input     Json                @default("{}")
+  output    Json                @default("{}")
+  prompt    String?
+  response  String?
+  modelUsed String?
+  createdAt DateTime            @default(now())
+  session   SupportChatSession? @relation(fields: [sessionId], references: [id])
+  user      User?               @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([sessionId])
+  @@index([type])
+  @@map("ai_interactions")
+}
+
+model SustainabilityJob {
+  id            String                  @id @default(uuid())
+  title         String
+  description   String?
+  type          SustainabilityJobType   @default(REFURBISHMENT)
+  status        SustainabilityJobStatus @default(OPEN)
+  deviceId      String?
+  assignedToId  String?
+  eWasteSavedKg Float                   @default(0)
+  carbonSavedKg Float                   @default(0)
+  completedAt   DateTime?
+  createdAt     DateTime                @default(now())
+  updatedAt     DateTime                @updatedAt
+  assignedTo    User?                   @relation("SustainabilityJobAssignee", fields: [assignedToId], references: [id])
+  device        Device?                 @relation(fields: [deviceId], references: [id])
+
+  @@index([deviceId])
+  @@index([assignedToId])
+  @@index([status])
+  @@index([type])
+  @@map("sustainability_jobs")
+}
+
+model Cart {
+  id        String     @id @default(uuid())
+  userId    String     @unique
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items     CartItem[]
+}
+
+model CartItem {
+  id        String   @id @default(uuid())
+  cartId    String
+  deviceId  String
+  quantity  Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  cart      Cart     @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  device    Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@unique([cartId, deviceId])
+}
+
+model Wishlist {
+  id        String   @id @default(uuid())
+  userId    String
+  deviceId  String
+  createdAt DateTime @default(now())
+  device    Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, deviceId])
+}
+
+model Payment {
+  id        String            @id @default(uuid())
+  orderId   String
+  userId    String
+  amount    Float
+  method    PaymentMethod
+  status    TransactionStatus @default(PENDING)
+  paidAt    DateTime?
+  createdAt DateTime          @default(now())
+  order     Order             @relation(fields: [orderId], references: [id])
+  user      User              @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([orderId])
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  type      String
+  message   String
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model SystemLog {
+  id        String   @id @default(uuid())
+  action    String
+  details   String
+  userId    String?
+  createdAt DateTime @default(now())
+  user      User?    @relation(fields: [userId], references: [id])
+}
+
 enum UserRole {
   CUSTOMER
   ADMIN
@@ -127,385 +476,4 @@ enum SustainabilityJobType {
   QUALITY_CHECK
   CERTIFICATION
   LOGISTICS
-}
-
-model User {
-  id        String     @id @default(uuid())
-  firstName String
-  lastName  String
-  email     String     @unique
-  phone     String?    @unique
-  avatarUrl String?
-  password  String
-  role      UserRole   @default(CUSTOMER)
-  status    UserStatus @default(ACTIVE)
-
-  isVerified   Boolean   @default(false)
-  otpCode      String?
-  otpExpiresAt DateTime?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Relations
-  devicesOwned           Device[]               @relation("DeviceOwner")
-  repairLogs             RepairLog[]            @relation("TechnicianRepair")
-  financingApplications  FinancingApplication[] @relation("CustomerFinancing")
-  approvedFinancings     FinancingApplication[] @relation("OfficerFinancing")
-  orders                 Order[]                @relation("UserOrders")
-  tradeInRequests        TradeInRequest[]       @relation("UserTradeIn")
-  reviewedTradeInRequests TradeInRequest[]      @relation("TechnicianTradeInReview")
-  supportSessions        SupportChatSession[]   @relation("UserSupport")
-  cart                   Cart?
-  wishlists              Wishlist[]
-  payments               Payment[]
-  notifications          Notification[]
-  logs                   SystemLog[]
-  assignedRefurbishments Refurbishment[]        @relation("RefurbishmentTechnician")
-  aiInteractions         AiInteraction[]
-  sustainabilityJobs     SustainabilityJob[]    @relation("SustainabilityJobAssignee")
-}
-
-model Device {
-  id                   String          @id @default(uuid())
-  brand                String
-  model                String
-  imageUrls            String          @default("[]")
-  originalSerialNumber String?
-  condition            DeviceCondition
-  status               DeviceStatus    @default(INTAKE)
-  batteryHealth        Int             @default(100)
-  repairNotes          String?
-  trustScore           Float           @default(100.0)
-  eWasteSavedKg        Float           @default(0.35)
-  carbonSavedKg        Float           @default(50.0)
-  price                Float
-  basePrice            Float
-  ownerId              String?
-  owner                User?           @relation("DeviceOwner", fields: [ownerId], references: [id])
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Relations
-  repairLogs            RepairLog[]
-  passport              DevicePassport?
-  listings              MarketplaceListing[]
-  orderItems            OrderItem[]
-  financingApplications FinancingApplication[]
-  cartItems             CartItem[]
-  wishlists             Wishlist[]
-  scoreRecord           TrustScore?
-  refurbishments        Refurbishment[]
-  sustainabilityJobs    SustainabilityJob[]
-}
-
-model DevicePassport {
-  id                   String   @id @default(uuid())
-  deviceId             String   @unique
-  device               Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
-  repairHistory        String   @default("[]") // JSON string storing array of history items
-  batteryHealthHistory String   @default("[]") // JSON string of health history
-  ownershipHistory     String   @default("[]") // JSON string of owners
-  certificationDetails String?
-  certifiedAt          DateTime @default(now())
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
-model RepairLog {
-  id           String       @id @default(uuid())
-  deviceId     String
-  device       Device       @relation(fields: [deviceId], references: [id], onDelete: Cascade)
-  technicianId String
-  technician   User         @relation("TechnicianRepair", fields: [technicianId], references: [id])
-  diagnostics  String
-  stepsTaken   String
-  partsUsed    String       @default("[]") // JSON string representing array of parts
-  status       DeviceStatus
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
-}
-
-model MarketplaceListing {
-  id          String        @id @default(uuid())
-  deviceId    String
-  device      Device        @relation(fields: [deviceId], references: [id], onDelete: Cascade)
-  title       String
-  description String
-  price       Float // Can dynamically shift
-  status      ListingStatus @default(ACTIVE)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
-model FinancingApplication {
-  id                    String          @id @default(uuid())
-  customerId            String
-  customer              User            @relation("CustomerFinancing", fields: [customerId], references: [id])
-  deviceId              String
-  device                Device          @relation(fields: [deviceId], references: [id])
-  status                FinancingStatus @default(PENDING)
-  totalAmount           Float
-  interestRate          Float           @default(0.12)
-  installmentMonths     Int             @default(12)
-  monthlyRepayment      Float
-  riskSummary           String?
-  fraudFlags            String?
-  paymentAbilityScore   Float?
-  officerRecommendation String?
-  approvedById          String?
-  approvedBy            User?           @relation("OfficerFinancing", fields: [approvedById], references: [id])
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Relations
-  repayments InstallmentRepayment[]
-  orders     Order[]
-}
-
-model InstallmentRepayment {
-  id          String               @id @default(uuid())
-  financingId String
-  financing   FinancingApplication @relation(fields: [financingId], references: [id], onDelete: Cascade)
-  dueDate     DateTime
-  amountDue   Float
-  amountPaid  Float                @default(0.0)
-  paidAt      DateTime?
-  status      RepaymentStatus      @default(UNPAID)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
-model Order {
-  id            String                @id @default(uuid())
-  customerId    String
-  customer      User                  @relation("UserOrders", fields: [customerId], references: [id])
-  totalAmount   Float
-  status        OrderStatus           @default(PENDING)
-  paymentStatus PaymentStatus         @default(UNPAID)
-  financingId   String?
-  financing     FinancingApplication? @relation(fields: [financingId], references: [id])
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  orderItems OrderItem[]
-  payments   Payment[]
-}
-
-model OrderItem {
-  id       String @id @default(uuid())
-  orderId  String
-  order    Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  deviceId String
-  device   Device @relation(fields: [deviceId], references: [id])
-  price    Float
-  quantity Int    @default(1)
-}
-
-model TradeInRequest {
-  id             String          @id @default(uuid())
-  userId         String
-  user           User            @relation("UserTradeIn", fields: [userId], references: [id])
-  brand          String
-  model          String
-  category       String?
-  condition      DeviceCondition
-  batteryHealth  Int?
-  askingPrice    Float?
-  estimatedValue Float
-  imageUrls      String          @default("[]")
-  defects        String?
-  storage        String?
-  ram            String?
-  color          String?
-  location       String?
-  aiReasoning    String?
-  technicianId   String?
-  technician     User?           @relation("TechnicianTradeInReview", fields: [technicianId], references: [id], onDelete: SetNull)
-  technicianComment String?
-  technicianRepairEstimate Float?
-  technicianReviewedAt DateTime?
-  officerNotes   String?
-  finalOfferAmount Float?
-  decisionAt     DateTime?
-  customerOfferDecision String?
-  customerDecisionAt DateTime?
-  status         TradeInStatus   @default(PENDING)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@index([technicianId])
-}
-
-model SupportChatSession {
-  id             String               @id @default(uuid())
-  customerId     String?
-  customer       User?                @relation("UserSupport", fields: [customerId], references: [id])
-  messages       SupportChatMessage[]
-  aiInteractions AiInteraction[]
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
-model SupportChatMessage {
-  id        String             @id @default(uuid())
-  sessionId String
-  session   SupportChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  sender    String // "USER" or "AI"
-  content   String
-
-  createdAt DateTime @default(now())
-}
-
-model TrustScore {
-  id                String   @id @default(uuid())
-  deviceId          String   @unique
-  score             Int
-  repairReliability Int
-  feedbackScore     Int
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
-  device            Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
-}
-
-model Refurbishment {
-  id           String              @id @default(uuid())
-  deviceId     String
-  technicianId String?
-  status       RefurbishmentStatus @default(RECEIVED)
-  diagnostics  String?
-  repairNotes  String?
-  partsUsed    String              @default("[]")
-  qcPassed     Boolean             @default(false)
-  certifiedAt  DateTime?
-  createdAt    DateTime            @default(now())
-  updatedAt    DateTime            @updatedAt
-  device       Device              @relation(fields: [deviceId], references: [id], onDelete: Cascade)
-  technician   User?               @relation("RefurbishmentTechnician", fields: [technicianId], references: [id], onDelete: SetNull)
-
-  @@index([deviceId])
-  @@index([technicianId])
-  @@index([status])
-  @@map("refurbishments")
-}
-
-model AiInteraction {
-  id        String              @id @default(uuid())
-  userId    String?
-  sessionId String?
-  type      AiInteractionType
-  input     Json                @default("{}")
-  output    Json                @default("{}")
-  prompt    String?
-  response  String?
-  modelUsed String?
-  createdAt DateTime            @default(now())
-  user      User?               @relation(fields: [userId], references: [id], onDelete: SetNull)
-  session   SupportChatSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
-
-  @@index([userId])
-  @@index([sessionId])
-  @@index([type])
-  @@map("ai_interactions")
-}
-
-model SustainabilityJob {
-  id            String                  @id @default(uuid())
-  title         String
-  description   String?
-  type          SustainabilityJobType   @default(REFURBISHMENT)
-  status        SustainabilityJobStatus @default(OPEN)
-  deviceId      String?
-  assignedToId  String?
-  eWasteSavedKg Float                   @default(0)
-  carbonSavedKg Float                   @default(0)
-  completedAt   DateTime?
-  createdAt     DateTime                @default(now())
-  updatedAt     DateTime                @updatedAt
-  device        Device?                 @relation(fields: [deviceId], references: [id], onDelete: SetNull)
-  assignedTo    User?                   @relation("SustainabilityJobAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
-
-  @@index([deviceId])
-  @@index([assignedToId])
-  @@index([status])
-  @@index([type])
-  @@map("sustainability_jobs")
-}
-
-model Cart {
-  id        String     @id @default(uuid())
-  userId    String     @unique
-  createdAt DateTime   @default(now())
-  updatedAt DateTime   @updatedAt
-  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  items     CartItem[]
-}
-
-model CartItem {
-  id        String   @id @default(uuid())
-  cartId    String
-  deviceId  String
-  quantity  Int
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  cart      Cart     @relation(fields: [cartId], references: [id], onDelete: Cascade)
-  device    Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
-
-  @@unique([cartId, deviceId])
-}
-
-model Wishlist {
-  id        String   @id @default(uuid())
-  userId    String
-  deviceId  String
-  createdAt DateTime @default(now())
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  device    Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
-
-  @@unique([userId, deviceId])
-}
-
-model Payment {
-  id        String            @id @default(uuid())
-  orderId   String
-  userId    String
-  amount    Float
-  method    PaymentMethod
-  status    TransactionStatus @default(PENDING)
-  paidAt    DateTime?
-  createdAt DateTime          @default(now())
-  order     Order             @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  user      User              @relation(fields: [userId], references: [id], onDelete: Restrict)
-
-  @@index([userId])
-  @@index([orderId])
-}
-
-model Notification {
-  id        String   @id @default(uuid())
-  userId    String
-  type      String
-  message   String
-  read      Boolean  @default(false)
-  createdAt DateTime @default(now())
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-}
-
-model SystemLog {
-  id        String   @id @default(uuid())
-  action    String
-  details   String
-  userId    String?
-  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
-  createdAt DateTime @default(now())
 }
