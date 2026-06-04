@@ -18,6 +18,7 @@ model User {
   isVerified             Boolean                @default(false)
   otpCode                String?
   otpExpiresAt           DateTime?
+  avatarUrl              String?
   createdAt              DateTime               @default(now())
   updatedAt              DateTime               @updatedAt
   cart                   Cart?
@@ -31,6 +32,7 @@ model User {
   supportSessions        SupportChatSession[]   @relation("UserSupport")
   logs                   SystemLog[]
   tradeInRequests        TradeInRequest[]       @relation("UserTradeIn")
+  technicianTradeIns     TradeInRequest[]       @relation("TradeInTechnician")
   wishlists              Wishlist[]
   aiInteractions         AiInteraction[]
   assignedRefurbishments Refurbishment[]        @relation("RefurbishmentTechnician")
@@ -51,6 +53,7 @@ model Device {
   carbonSavedKg         Float                  @default(50.0)
   price                 Float
   basePrice             Float
+  imageUrls             String                 @default("[]")
   ownerId               String?
   createdAt             DateTime               @default(now())
   updatedAt             DateTime               @updatedAt
@@ -168,27 +171,38 @@ model OrderItem {
 }
 
 model TradeInRequest {
-  id             String          @id @default(uuid())
-  userId         String
-  brand          String
-  model          String
-  condition      DeviceCondition
-  estimatedValue Float
-  status         TradeInStatus   @default(PENDING)
-  createdAt      DateTime        @default(now())
-  updatedAt      DateTime        @updatedAt
-  aiReasoning    String?
-  askingPrice    Float?
-  batteryHealth  Int?
-  category       String?
-  color          String?
-  defects        String?
-  imageUrls      String          @default("[]")
-  location       String?
-  officerNotes   String?
-  ram            String?
-  storage        String?
-  user           User            @relation("UserTradeIn", fields: [userId], references: [id])
+  id                       String                  @id @default(uuid())
+  userId                   String
+  brand                    String
+  model                    String
+  condition                DeviceCondition
+  estimatedValue           Float
+  status                   TradeInStatus           @default(PENDING)
+  createdAt                DateTime                @default(now())
+  updatedAt                DateTime                @updatedAt
+  aiReasoning              String?
+  askingPrice              Float?
+  batteryHealth            Int?
+  category                 String?
+  color                    String?
+  defects                  String?
+  imageUrls                String                  @default("[]")
+  location                 String?
+  officerNotes             String?
+  ram                      String?
+  storage                  String?
+  technicianId             String?
+  technicianComment        String?
+  technicianRepairEstimate Float?
+  technicianReviewedAt     DateTime?
+  finalOfferAmount         Float?
+  decisionAt               DateTime?
+  customerOfferDecision    CustomerOfferDecision?
+  customerDecisionAt       DateTime?
+  user                     User                    @relation("UserTradeIn", fields: [userId], references: [id])
+  technician               User?                   @relation("TradeInTechnician", fields: [technicianId], references: [id])
+
+  @@index([technicianId])
 }
 
 model SupportChatSession {
@@ -444,6 +458,11 @@ enum TradeInStatus {
   APPROVED
   REJECTED
   COMPLETED
+}
+
+enum CustomerOfferDecision {
+  APPROVED
+  REJECTED
 }
 
 enum RefurbishmentStatus {
