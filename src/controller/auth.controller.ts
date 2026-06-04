@@ -13,7 +13,10 @@ const generateOtp = (): string => {
 
 export const register = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { firstName, lastName, email, phone, password } = req.body;
+    const { firstName, lastName, email, password } = req.body;
+    const phone = typeof req.body.phone === "string" && req.body.phone.trim()
+      ? req.body.phone.trim()
+      : null;
 
     if (!firstName || !lastName || !email || !password) {
       res.status(400).json({ message: "Required fields: firstName, lastName, email, password" });
@@ -39,8 +42,6 @@ export const register = async (req: Request, res: Response): Promise<void> => {
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    const otp = generateOtp();
-    const otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 mins
 
     const accountData = {
       firstName,
@@ -49,9 +50,9 @@ export const register = async (req: Request, res: Response): Promise<void> => {
       password: hashedPassword,
       role: UserRole.CUSTOMER,
       status: UserStatus.ACTIVE,
-      isVerified: false,
-      otpCode: otp,
-      otpExpiresAt: otpExpires,
+      isVerified: true,
+      otpCode: null,
+      otpExpiresAt: null,
     };
 
     const user = existingUser
@@ -66,27 +67,20 @@ export const register = async (req: Request, res: Response): Promise<void> => {
         },
       });
 
-    await writeAuditLog({
-      action: existingUser ? "USER_REREGISTER" : "USER_REGISTER",
-      details: `User ${user.email} ${existingUser ? "reactivated" : "registered"} with role ${user.role}.`,
-      userId: user.id,
-    });
-
-    let delivery: { emailed: boolean; devOtp?: string };
     try {
-      delivery = await deliverOtpEmail(user.email, otp, "verification");
-    } catch (err) {
-      console.error("[Register] OTP delivery failed after user create:", err);
-      delivery = { emailed: false, devOtp: otp };
+      await writeAuditLog({
+        action: existingUser ? "USER_REREGISTER" : "USER_REGISTER",
+        details: `User ${user.email} ${existingUser ? "reactivated" : "registered"} with role ${user.role}.`,
+        userId: user.id,
+      });
+    } catch (auditErr) {
+      console.error("[Register] Audit log failed (registration continues):", auditErr);
     }
 
     res.status(201).json({
-      message: delivery.emailed
-        ? "Registration successful. Please check your email for the verification code."
-        : "Registration successful. Enter the verification code on the next screen (email could not be sent).",
+      message: "Registration successful. You can sign in now.",
       userId: user.id,
       email: user.email,
-      ...(delivery.devOtp ? { otpCode: delivery.devOtp } : {}),
     });
   } catch (error: any) {
     res.status(500).json({ message: "Registration failed", error: error.message });
@@ -165,11 +159,6 @@ export const login = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    if (!user.isVerified) {
-      res.status(403).json({ message: "Account not verified. Please verify using OTP first.", userId: user.id });
-      return;
-    }
-
     if (user.status !== UserStatus.ACTIVE) {
       res.status(403).json({ message: "Account is not active. Please contact support." });
       return;
@@ -182,14 +171,19 @@ export const login = async (req: Request, res: Response): Promise<void> => {
     };
 
     const jwtSecret = process.env["JWT_SECRET"] || "defaultsecret";
-    const expires = process.env["JWT_EXPIRES_IN"] || "7d";
-    const token = jwt.sign(tokenPayload, jwtSecret, { expiresIn: expires as any });
+    const token = jwt.sign(tokenPayload, jwtSecret, {
+      expiresIn: process.env["JWT_EXPIRES_IN"] || "7d",
+    } as jwt.SignOptions);
 
-    await writeAuditLog({
-      action: "USER_LOGIN",
-      details: `User ${user.email} logged in.`,
-      userId: user.id,
-    });
+    try {
+      await writeAuditLog({
+        action: "USER_LOGIN",
+        details: `User ${user.email} logged in.`,
+        userId: user.id,
+      });
+    } catch (auditErr) {
+      console.error("[Login] Audit log failed (login continues):", auditErr);
+    }
 
     res.status(200).json({
       message: "Login successful",
