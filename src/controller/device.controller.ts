@@ -1,7 +1,7 @@
 import type { Response } from "express";
 import type { AuthenticatedRequest } from "../middleware/auth.js";
 import { prisma } from "../config/prisma.js";
-import { DeviceCondition, DeviceStatus, ListingStatus, TradeInStatus, UserRole } from "@prisma/client";
+import { DeviceCondition, DeviceStatus, ListingStatus, RefurbishmentStatus, TradeInStatus, UserRole } from "@prisma/client";
 import { AiService } from "../services/ai.service.js";
 import { uploadInventoryImages, uploadTradeInImages, isCloudinaryConfigured } from "../services/upload.service.js";
 import { sendTradeInDecisionEmail, sendTradeInOfferAcceptedEmail, sendTradeInPickupEmail } from "../services/email.service.js";
@@ -860,20 +860,71 @@ export const customerDecisionTradeIn = async (req: AuthenticatedRequest, res: Re
 
     if (accept) {
       const { eWasteSavedKg, carbonSavedKg } = calculateSustainabilityMetrics(tradeIn.brand, tradeIn.model);
-      await prisma.device.create({
-        data: {
-          brand: tradeIn.brand,
-          model: tradeIn.model,
-          condition: tradeIn.condition,
-          status: DeviceStatus.INTAKE,
-          basePrice: tradeIn.finalOfferAmount,
-          price: tradeIn.finalOfferAmount * 1.3,
-          ownerId: null,
-          trustScore: calculateTrustScore(tradeIn.condition, tradeIn.batteryHealth ?? 85, 0),
-          eWasteSavedKg,
-          carbonSavedKg,
-          repairNotes: `Repair pipeline initiated from accepted sell offer (${tradeIn.id}).`,
-        },
+      const assignTechnicianId =
+        tradeIn.technicianId ||
+        (
+          await prisma.user.findFirst({
+            where: { role: UserRole.TECHNICIAN, status: "ACTIVE" },
+            select: { id: true },
+          })
+        )?.id ||
+        null;
+
+      const inspectionSummary = [
+        tradeIn.technicianComment ? `Pre-offer inspection: ${tradeIn.technicianComment}` : null,
+        tradeIn.defects ? `Reported defects: ${tradeIn.defects}` : null,
+        tradeIn.technicianRepairEstimate != null
+          ? `Estimated repair cost: $${tradeIn.technicianRepairEstimate.toFixed(2)}`
+          : null,
+      ]
+        .filter(Boolean)
+        .join("\n");
+
+      const offerAmount = tradeIn.finalOfferAmount!;
+
+      await prisma.$transaction(async (tx) => {
+        const device = await tx.device.create({
+          data: {
+            brand: tradeIn.brand,
+            model: tradeIn.model,
+            condition: tradeIn.condition,
+            status: DeviceStatus.INTAKE,
+            basePrice: offerAmount,
+            price: offerAmount * 1.3,
+            ownerId: null,
+            batteryHealth: tradeIn.batteryHealth ?? 85,
+            imageUrls: tradeIn.imageUrls,
+            trustScore: calculateTrustScore(tradeIn.condition, tradeIn.batteryHealth ?? 85, 0),
+            eWasteSavedKg,
+            carbonSavedKg,
+            repairNotes: inspectionSummary || `Repair pipeline initiated from accepted sell offer (${tradeIn.id}).`,
+          },
+        });
+
+        await tx.tradeInRequest.update({
+          where: { id: tradeInId },
+          data: { deviceId: device.id },
+        });
+
+        await tx.refurbishment.create({
+          data: {
+            deviceId: device.id,
+            technicianId: assignTechnicianId,
+            status: RefurbishmentStatus.RECEIVED,
+            diagnostics: inspectionSummary || `Assigned from accepted sell offer ${tradeIn.id.slice(0, 8)}.`,
+            repairNotes: tradeIn.technicianComment || null,
+          },
+        });
+
+        if (assignTechnicianId) {
+          await tx.notification.create({
+            data: {
+              userId: assignTechnicianId,
+              type: "DEVICE_ASSIGNED",
+              message: `New device assigned: ${tradeIn.brand} ${tradeIn.model} — repair from accepted sell offer.`,
+            },
+          });
+        }
       });
       if (updatedTradeIn.user?.email) {
         const customerName =
@@ -901,14 +952,172 @@ export const customerDecisionTradeIn = async (req: AuthenticatedRequest, res: Re
       userId: req.user?.id || null,
     });
 
+    const finalTradeIn = accept
+      ? await prisma.tradeInRequest.findUnique({
+          where: { id: tradeInId },
+          include: {
+            user: { select: { firstName: true, lastName: true, email: true, phone: true } },
+            technician: { select: { firstName: true, lastName: true, email: true } },
+          },
+        })
+      : updatedTradeIn;
+
     res.status(200).json({
       message: accept
-        ? "Offer approved. Device moved to technician repair process."
+        ? "Offer approved. Device assigned to technician for repair."
         : "Offer rejected. Pickup instructions were sent to your email.",
-      tradeIn: updatedTradeIn,
+      tradeIn: finalTradeIn,
     });
   } catch (error: any) {
     res.status(500).json({ message: "Failed to save customer decision", error: error.message });
+  }
+};
+
+export const listDevicesAwaitingPricing = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const devices = await prisma.device.findMany({
+      where: {
+        status: { in: [DeviceStatus.READY, DeviceStatus.AVAILABLE] },
+        refurbishments: { some: { status: { in: [RefurbishmentStatus.READY, RefurbishmentStatus.CERTIFIED] } } },
+      },
+      include: {
+        refurbishments: {
+          where: { status: { in: [RefurbishmentStatus.READY, RefurbishmentStatus.CERTIFIED] } },
+          orderBy: { updatedAt: "desc" },
+          take: 1,
+          include: { technician: { select: { firstName: true, lastName: true, email: true } } },
+        },
+        tradeInRequest: {
+          select: {
+            id: true,
+            defects: true,
+            technicianComment: true,
+            technicianRepairEstimate: true,
+            estimatedValue: true,
+            condition: true,
+            batteryHealth: true,
+            finalOfferAmount: true,
+            aiReasoning: true,
+          },
+        },
+        listings: true,
+      },
+      orderBy: { updatedAt: "desc" },
+    });
+
+    const enriched = devices.map((device) => ({
+      ...device,
+      pricingStatus: device.status === DeviceStatus.READY ? "AWAITING" : "PUBLISHED",
+    }));
+
+    res.status(200).json({ devices: enriched });
+  } catch (error: any) {
+    res.status(500).json({ message: "Failed to list devices awaiting pricing", error: error.message });
+  }
+};
+
+export const setDevicePricing = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const id = parseOptionalString(req.params["id"]);
+    if (!id) {
+      res.status(400).json({ message: "Device id is required" });
+      return;
+    }
+
+    const {
+      price,
+      basePrice,
+      postRepairCondition,
+      promotionLabel,
+      promotionPercent,
+      discountPercent,
+      publishToMarketplace,
+    } = req.body;
+
+    if (price === undefined || Number(price) <= 0) {
+      res.status(400).json({ message: "A valid list price is required" });
+      return;
+    }
+
+    const existing = await prisma.device.findUnique({
+      where: { id },
+      include: { refurbishments: true, listings: true },
+    });
+    if (!existing) {
+      res.status(404).json({ message: "Device not found" });
+      return;
+    }
+
+    const hasCompletedRepair = existing.refurbishments.some((r) =>
+      r.status === RefurbishmentStatus.READY || r.status === RefurbishmentStatus.CERTIFIED
+    );
+    if (!hasCompletedRepair && existing.status !== DeviceStatus.READY) {
+      res.status(400).json({ message: "Device repair is not complete yet" });
+      return;
+    }
+
+    const listPrice = Number(price);
+    const promoPct = promotionPercent != null ? Number(promotionPercent) : null;
+    const discPct = discountPercent != null ? Number(discountPercent) : null;
+    const salePrice =
+      Math.round(
+        listPrice *
+          (1 - (discPct != null && discPct > 0 ? discPct / 100 : 0)) *
+          (1 - (promoPct != null && promoPct > 0 ? promoPct / 100 : 0)) *
+          100,
+      ) / 100;
+
+    const device = await prisma.$transaction(async (tx) => {
+      const updated = await tx.device.update({
+        where: { id },
+        data: {
+          price: salePrice,
+          ...(basePrice !== undefined ? { basePrice: Number(basePrice) } : {}),
+          ...(postRepairCondition && Object.values(DeviceCondition).includes(postRepairCondition)
+            ? { postRepairCondition: postRepairCondition as DeviceCondition, condition: postRepairCondition as DeviceCondition }
+            : {}),
+          ...(promotionLabel !== undefined ? { promotionLabel: promotionLabel || null } : {}),
+          ...(promotionPercent !== undefined ? { promotionPercent: promoPct } : {}),
+          ...(discountPercent !== undefined ? { discountPercent: discPct } : {}),
+          status: publishToMarketplace !== false ? DeviceStatus.AVAILABLE : DeviceStatus.READY,
+        },
+      });
+
+      if (publishToMarketplace !== false) {
+        const activeListing = existing.listings.find((l) => l.status === ListingStatus.ACTIVE);
+        const title = `${updated.brand} ${updated.model} — Certified Refurbished`;
+        const description = updated.repairNotes || `Certified refurbished ${updated.brand} ${updated.model}.`;
+        const listingPrice = salePrice;
+        if (activeListing) {
+          await tx.marketplaceListing.update({
+            where: { id: activeListing.id },
+            data: { price: listingPrice, title, description, status: ListingStatus.ACTIVE },
+          });
+        } else {
+          await tx.marketplaceListing.create({
+            data: {
+              deviceId: id,
+              title,
+              description,
+              price: listingPrice,
+              status: ListingStatus.ACTIVE,
+            },
+          });
+        }
+      }
+
+      return updated;
+    });
+
+    await writeAuditLog({
+      action: "DEVICE_PRICING",
+      details: `Finance officer ${req.user?.email} set pricing for ${device.brand} ${device.model} at $${device.price}.`,
+      userId: req.user?.id || null,
+    });
+
+    res.status(200).json({ message: "Device pricing saved successfully", device });
+  } catch (error: any) {
+    res.status(500).json({ message: "Failed to save device pricing", error: error.message });
   }
 };
 

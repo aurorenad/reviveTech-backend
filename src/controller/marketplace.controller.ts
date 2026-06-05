@@ -5,6 +5,8 @@ import { DeviceStatus, ListingStatus, OrderStatus, PaymentStatus } from "@prisma
 import { writeAuditLog } from "../utils/audit-log.js";
 import { parseOptionalString } from "../utils/request.js";
 
+const BROWSEABLE_DEVICE_STATUSES: DeviceStatus[] = [DeviceStatus.READY, DeviceStatus.AVAILABLE];
+
 // Smart Pricing Engine algorithm
 // Adjusts the listing price based on current stock levels for the brand and the device condition.
 const runSmartPricingEngine = async (deviceId: string): Promise<number> => {
@@ -49,7 +51,7 @@ export const getListings = async (req: AuthenticatedRequest, res: Response): Pro
     const filters: any = {
       status: ListingStatus.ACTIVE,
       device: {
-        status: DeviceStatus.READY,
+        status: { in: BROWSEABLE_DEVICE_STATUSES },
       },
     };
 
@@ -86,6 +88,8 @@ export const getListings = async (req: AuthenticatedRequest, res: Response): Pro
             condition: true,
             batteryHealth: true,
             trustScore: true,
+            basePrice: true,
+            price: true,
             eWasteSavedKg: true,
             carbonSavedKg: true,
           },
@@ -126,7 +130,7 @@ export const getListingDetails = async (req: AuthenticatedRequest, res: Response
         where: {
           deviceId: id,
           status: ListingStatus.ACTIVE,
-          device: { status: DeviceStatus.READY },
+          device: { status: { in: BROWSEABLE_DEVICE_STATUSES } },
         },
         include: {
           device: {
@@ -331,7 +335,7 @@ export const checkout = async (req: AuthenticatedRequest, res: Response): Promis
       return;
     }
 
-    const unavailableDevices = devices.filter(d => d.status !== DeviceStatus.READY);
+    const unavailableDevices = devices.filter((d) => !BROWSEABLE_DEVICE_STATUSES.includes(d.status));
     if (unavailableDevices.length > 0) {
       res.status(400).json({
         message: "Some devices are not ready or are already sold",

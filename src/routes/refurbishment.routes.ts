@@ -11,7 +11,12 @@ import { requireAuth, requireRoles } from "../middleware/auth.js";
 
 const router = Router();
 
-router.get("/", requireAuth, requireRoles([UserRole.ADMIN, UserRole.TECHNICIAN]), listRefurbishments);
+router.get(
+  "/",
+  requireAuth,
+  requireRoles([UserRole.ADMIN, UserRole.TECHNICIAN, UserRole.FINANCE_OFFICER]),
+  listRefurbishments,
+);
 router.get("/:id", requireAuth, requireRoles([UserRole.ADMIN, UserRole.TECHNICIAN]), getRefurbishment);
 router.post("/", requireAuth, requireRoles([UserRole.ADMIN, UserRole.TECHNICIAN]), createRefurbishment);
 router.put("/:id", requireAuth, requireRoles([UserRole.ADMIN, UserRole.TECHNICIAN]), updateRefurbishment);

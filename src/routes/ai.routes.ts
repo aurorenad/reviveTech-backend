@@ -3,6 +3,7 @@ import {
   evaluateDeviceValuation,
   checkFinancingRisk,
   getRepairSteps,
+  suggestResellPricing,
   sendSupportMessage,
 } from "../controller/ai.controller.js";
 import { listAiInteractions } from "../controller/ai-layer.controller.js";
@@ -18,6 +19,12 @@ router.post("/support-chat", optionalAuth, sendSupportMessage); // chatbot
 router.post("/valuation", requireAuth, evaluateDeviceValuation);
 router.post("/finance-check", requireAuth, checkFinancingRisk);
 router.post("/repair-guidance", requireAuth, requireRoles([UserRole.TECHNICIAN, UserRole.ADMIN]), getRepairSteps);
+router.post(
+  "/resell-pricing",
+  requireAuth,
+  requireRoles([UserRole.FINANCE_OFFICER, UserRole.ADMIN]),
+  suggestResellPricing,
+);
 router.get("/interactions", requireAuth, requireRoles([UserRole.ADMIN, UserRole.SUPPORT_AGENT]), listAiInteractions);
 
 export default router;

@@ -5,6 +5,8 @@ import {
   getDevice,
   getTradeIn,
   listDevices,
+  listDevicesAwaitingPricing,
+  setDevicePricing,
   intakeDevice,
   updateDevice,
   updateRepairStatus,
@@ -55,6 +57,19 @@ router.put("/trade-in/:id/customer-decision", requireAuth, requireRoles([UserRol
 router.put("/trade-in", requireAuth, requireRoles([UserRole.ADMIN, UserRole.FINANCE_OFFICER]), reviewTradeIn);
 router.put("/trade-in/:id", requireAuth, requireRoles([UserRole.ADMIN, UserRole.FINANCE_OFFICER]), reviewTradeIn);
 router.delete("/trade-in/:id", requireAuth, deleteTradeIn);
+
+router.get(
+  "/awaiting-pricing",
+  requireAuth,
+  requireRoles([UserRole.FINANCE_OFFICER, UserRole.ADMIN]),
+  listDevicesAwaitingPricing,
+);
+router.put(
+  "/:id/pricing",
+  requireAuth,
+  requireRoles([UserRole.FINANCE_OFFICER, UserRole.ADMIN]),
+  setDevicePricing,
+);
 
 router.get("/:id", requireAuth, requireRoles([UserRole.TECHNICIAN, UserRole.ADMIN]), getDevice);
 router.put("/:id", requireAuth, requireRoles([UserRole.TECHNICIAN, UserRole.ADMIN]), updateDevice);

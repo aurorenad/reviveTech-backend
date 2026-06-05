@@ -46,6 +46,28 @@ interface RepairResponse {
   recommendedParts: string[];
 }
 
+interface ResellPricingRequest {
+  brand: string;
+  model: string;
+  originalCondition: DeviceCondition;
+  postRepairCondition?: DeviceCondition;
+  batteryHealth: number;
+  acquisitionCost: number;
+  repairCost?: number;
+  originalAiEstimate?: number;
+  preOfferInspection?: string;
+  repairNotes?: string;
+  defects?: string;
+}
+
+interface ResellPricingResponse {
+  suggestedListPrice: number;
+  suggestedPromotionPercent: number | null;
+  marginPercent: number;
+  conditionComparison: string;
+  reasoning: string;
+}
+
 type LlmProvider = "groq" | "openai";
 
 export class AiService {
@@ -312,7 +334,53 @@ export class AiService {
   }
 
   /**
-   * 4. AI Customer Support Chat
+   * 4. AI Post-Repair Resell Pricing
+   */
+  static async suggestResellPrice(req: ResellPricingRequest): Promise<ResellPricingResponse> {
+    const postCondition = req.postRepairCondition || req.originalCondition;
+    const multipliers: Record<DeviceCondition, number> = {
+      NEW: 1.0,
+      EXCELLENT: 0.88,
+      GOOD: 0.74,
+      FAIR: 0.55,
+      POOR: 0.35,
+    };
+    const origMult = multipliers[req.originalCondition] || 0.7;
+    const postMult = multipliers[postCondition] || 0.7;
+    const batMult = req.batteryHealth >= 90 ? 1.0 : req.batteryHealth >= 80 ? 0.94 : 0.86;
+    const repairCost = req.repairCost ?? 0;
+    const baseResale = (req.originalAiEstimate || req.acquisitionCost * 1.45) * (postMult / origMult) * batMult;
+    const minViable = req.acquisitionCost + repairCost + 40;
+    const suggested = Math.round(Math.max(minViable, baseResale));
+    const margin = suggested > 0 ? Math.round(((suggested - req.acquisitionCost - repairCost) / suggested) * 100) : 0;
+
+    const systemPrompt =
+      "You are an AI pricing assistant for a refurbished electronics marketplace. Suggest resale list prices based on device condition before and after repair, inspection notes, and acquisition costs.";
+    const userPrompt = `Brand: ${req.brand}, Model: ${req.model}
+Original condition: ${req.originalCondition}
+Post-repair condition: ${postCondition}
+Battery health: ${req.batteryHealth}%
+Acquisition cost: $${req.acquisitionCost}
+Repair cost: $${repairCost}
+Original AI estimate: ${req.originalAiEstimate ?? "unknown"}
+Pre-offer inspection: ${req.preOfferInspection || "none"}
+Repair completion notes: ${req.repairNotes || "none"}
+Reported defects: ${req.defects || "none"}
+Format: JSON with keys suggestedListPrice (number), suggestedPromotionPercent (number or null), marginPercent (number), conditionComparison (string), reasoning (string).`;
+
+    const fallbackResponse: ResellPricingResponse = {
+      suggestedListPrice: suggested,
+      suggestedPromotionPercent: margin > 30 ? 5 : null,
+      marginPercent: margin,
+      conditionComparison: `Condition moved from ${req.originalCondition} to ${postCondition} after refurbishment.`,
+      reasoning: `Based on acquisition cost ($${req.acquisitionCost}), repair spend ($${repairCost}), and improved condition (${postCondition}), a list price of $${suggested} balances competitiveness with a ${margin}% margin. ${req.repairNotes ? `Repair notes: ${req.repairNotes.slice(0, 120)}.` : ""}`,
+    };
+
+    return this.callLlm<ResellPricingResponse>(systemPrompt, userPrompt, fallbackResponse);
+  }
+
+  /**
+   * 5. AI Customer Support Chat
    */
   static async handleSupportChat(sessionId: string, message: string): Promise<string> {
     // 1. Log user message

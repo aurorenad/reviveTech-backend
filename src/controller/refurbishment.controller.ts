@@ -71,7 +71,22 @@ export const listRefurbishments = async (req: AuthenticatedRequest, res: Respons
     const refurbishments = await prisma.refurbishment.findMany({
       where: req.user?.role === UserRole.TECHNICIAN ? { technicianId: req.user.id } : {},
       include: {
-        device: true,
+        device: {
+          include: {
+            tradeInRequest: {
+              select: {
+                id: true,
+                defects: true,
+                technicianComment: true,
+                technicianRepairEstimate: true,
+                estimatedValue: true,
+                condition: true,
+                batteryHealth: true,
+                finalOfferAmount: true,
+              },
+            },
+          },
+        },
         technician: { select: { id: true, firstName: true, lastName: true, email: true } },
       },
       orderBy: { createdAt: "desc" },
@@ -94,7 +109,25 @@ export const getRefurbishment = async (req: AuthenticatedRequest, res: Response)
     const refurbishment = await prisma.refurbishment.findUnique({
       where: { id },
       include: {
-        device: { include: { passport: true, repairLogs: true } },
+        device: {
+          include: {
+            passport: true,
+            repairLogs: true,
+            tradeInRequest: {
+              select: {
+                id: true,
+                defects: true,
+                technicianComment: true,
+                technicianRepairEstimate: true,
+                estimatedValue: true,
+                condition: true,
+                batteryHealth: true,
+                finalOfferAmount: true,
+                aiReasoning: true,
+              },
+            },
+          },
+        },
         technician: { select: { id: true, firstName: true, lastName: true, email: true } },
       },
     });
@@ -167,6 +200,22 @@ export const updateRefurbishment = async (req: AuthenticatedRequest, res: Respon
       where: { id: existing.deviceId },
       data: { status: mapDeviceStatus(nextStatus), repairNotes: repairNotes || diagnostics || existingDevice.repairNotes },
     });
+
+    if (nextStatus === RefurbishmentStatus.READY || nextStatus === RefurbishmentStatus.CERTIFIED) {
+      const financeOfficers = await prisma.user.findMany({
+        where: { role: UserRole.FINANCE_OFFICER, status: "ACTIVE" },
+        select: { id: true },
+      });
+      if (financeOfficers.length > 0) {
+        await prisma.notification.createMany({
+          data: financeOfficers.map((officer) => ({
+            userId: officer.id,
+            type: "REPAIR_COMPLETE",
+            message: `Repair complete: ${existingDevice.brand} ${existingDevice.model} is ready for pricing.`,
+          })),
+        });
+      }
+    }
 
     await writeAuditLog({
       action: "REFURBISHMENT_UPDATE",

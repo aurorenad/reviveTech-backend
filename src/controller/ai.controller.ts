@@ -103,6 +103,58 @@ export const getRepairSteps = async (req: AuthenticatedRequest, res: Response): 
   }
 };
 
+export const suggestResellPricing = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const {
+      brand,
+      model,
+      originalCondition,
+      postRepairCondition,
+      batteryHealth,
+      acquisitionCost,
+      repairCost,
+      originalAiEstimate,
+      preOfferInspection,
+      repairNotes,
+      defects,
+    } = req.body;
+
+    if (!brand || !model || !originalCondition || acquisitionCost === undefined) {
+      res.status(400).json({
+        message: "Required fields: brand, model, originalCondition, acquisitionCost",
+      });
+      return;
+    }
+
+    const suggestion = await AiService.suggestResellPrice({
+      brand,
+      model,
+      originalCondition: originalCondition as DeviceCondition,
+      ...(postRepairCondition ? { postRepairCondition: postRepairCondition as DeviceCondition } : {}),
+      batteryHealth: batteryHealth !== undefined ? parseInt(batteryHealth) : 85,
+      acquisitionCost: parseFloat(acquisitionCost),
+      ...(repairCost !== undefined ? { repairCost: parseFloat(repairCost) } : {}),
+      ...(originalAiEstimate !== undefined ? { originalAiEstimate: parseFloat(originalAiEstimate) } : {}),
+      ...(preOfferInspection ? { preOfferInspection } : {}),
+      ...(repairNotes ? { repairNotes } : {}),
+      ...(defects ? { defects } : {}),
+    });
+
+    await prisma.aiInteraction.create({
+      data: {
+        userId: req.user?.id || null,
+        type: AiInteractionType.RESELL_PRICING,
+        input: toJson(req.body),
+        output: toJson(suggestion),
+      },
+    });
+
+    res.status(200).json({ suggestion });
+  } catch (error: any) {
+    res.status(500).json({ message: "AI resell pricing failed", error: error.message });
+  }
+};
+
 export const sendSupportMessage = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { sessionId, message } = req.body;

@@ -45,6 +45,7 @@ model Device {
   model                 String
   originalSerialNumber  String?
   condition             DeviceCondition
+  postRepairCondition   DeviceCondition?
   status                DeviceStatus           @default(INTAKE)
   batteryHealth         Int                    @default(100)
   repairNotes           String?
@@ -53,6 +54,9 @@ model Device {
   carbonSavedKg         Float                  @default(50.0)
   price                 Float
   basePrice             Float
+  promotionLabel        String?
+  promotionPercent      Float?
+  discountPercent       Float?
   imageUrls             String                 @default("[]")
   ownerId               String?
   createdAt             DateTime               @default(now())
@@ -68,6 +72,7 @@ model Device {
   wishlists             Wishlist[]
   refurbishments        Refurbishment[]
   sustainabilityJobs    SustainabilityJob[]
+  tradeInRequest        TradeInRequest?
 }
 
 model DevicePassport {
@@ -199,10 +204,13 @@ model TradeInRequest {
   decisionAt               DateTime?
   customerOfferDecision    CustomerOfferDecision?
   customerDecisionAt       DateTime?
+  deviceId                 String?                 @unique
   user                     User                    @relation("UserTradeIn", fields: [userId], references: [id])
   technician               User?                   @relation("TradeInTechnician", fields: [technicianId], references: [id])
+  device                   Device?                 @relation(fields: [deviceId], references: [id])
 
   @@index([technicianId])
+  @@index([deviceId])
 }
 
 model SupportChatSession {
@@ -480,6 +488,7 @@ enum AiInteractionType {
   REPAIR_GUIDANCE
   SUPPORT_CHAT
   INVENTORY_PREDICTION
+  RESELL_PRICING
 }
 
 enum SustainabilityJobStatus {
